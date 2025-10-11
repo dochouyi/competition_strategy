@@ -1,0 +1,35 @@
+version: '3.8'
+services:
+  freqtrade-producer:
+    image: freqtradeorg/freqtrade:stable
+    container_name: freqtrade-producer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"  # 暴露给宿主以便本机调试；容器间也可用服务名访问
+    volumes:
+      - "./producer/user_data:/freqtrade/user_data"
+      - "/etc/timezone:/etc/timezone:ro"
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/producer.log
+      --db-url sqlite:////freqtrade/user_data/db/trades_producer.sqlite
+      --config /freqtrade/user_data/config_producer.json
+      --strategy ProducerStrategy
+
+  freqtrade-consumer:
+    image: freqtradeorg/freqtrade:stable
+    container_name: freqtrade-consumer
+    depends_on:
+      - freqtrade-producer
+    restart: unless-stopped
+    volumes:
+      - "./consumer/user_data:/freqtrade/user_data"
+      - "/etc/timezone:/etc/timezone:ro"
+    command: >
+      trade
+      --logfile /freqtrade/user_data/logs/consumer.log
+      --db-url sqlite:////freqtrade/user_data/db/trades_consumer.sqlite
+      --config /freqtrade/user_data/config_consumer.json
+      --strategy ConsumerStrategy
+    # 若 consumer 通过容器网络访问 producer，可在 consumer 配置里把 host 改为 "freqtrade-producer"
+    # external_message_consumer.producers[0].host = "freqtrade-producer"

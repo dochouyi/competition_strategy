@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="c2d0e26d-81b5-440a-a70e-15c90bd9852b" name="freqtrade">
+        <fileTransfer accessType="SFTP" host="47.76.154.82" port="22" sshConfigId="03114934-b30a-406c-a445-241e41ad16ba" sshConfig="root@47.76.154.82:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
