@@ -4,12 +4,9 @@ from pandas import DataFrame
 
 class DummyStrategy(IStrategy):
     INTERFACE_VERSION = 3
-
-    # 参数设置
     timeframe = '1h'
     minimal_roi = {"0": 1}
     stoploss = -0.5
-
     trailing_stop = False
     process_only_new_candles = True
     use_exit_signal = False

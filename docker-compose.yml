@@ -14,8 +14,8 @@ services:
       --logfile /freqtrade/user_data/logs/freqtrade_binance.log
       --db-url sqlite:////freqtrade/user_data/db/tradesv3_binance.sqlite
       --config /freqtrade/user_data/config_binance.json
-      --strategy PairSignalStrategy
+      --strategy PairSignalStrategy3
 
-
+  #  docker compose up
   #  docker compose up -d
   #  docker compose down
