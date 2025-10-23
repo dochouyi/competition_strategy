@@ -381,7 +381,6 @@ class PairSignalStrategy:
                 delta_sec = (sig.exit_trade_time - sig.entry_trade_time).total_seconds()
                 sig.hold_duration_hours = float(delta_sec) / 3600.0
 
-
         session.commit()
 
 # --------------------------

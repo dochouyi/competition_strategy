@@ -58,6 +58,9 @@ class PairSignal(Base):
     bb_entry_up = Column(Float, nullable=True)     # 5m上轨
     bb_entry_lo = Column(Float, nullable=True)     # 5m下轨
 
+    # 新增：组合名义成本（入场时基于价格与 beta 计算）
+    notional = Column(Float, nullable=True)
+
     # 出场信息
     exit_trade_time = Column(DateTime, index=True, nullable=True)
     a_exit_price = Column(Float, nullable=True)    # 1m
@@ -65,10 +68,13 @@ class PairSignal(Base):
     bb_exit_mid = Column(Float, nullable=True)     # 5m中轨
     exit_reason = Column(String, nullable=True)    # "to_mid" or "force_exit"
 
-    # 绩效
-    pnl_abs = Column(Float, nullable=True)         # 绝对收益（基于单位权重 1 和 beta）
-    max_drawdown_abs = Column(Float, nullable=True)  # 持仓期绝对最大回撤
-    peak_pnl = Column(Float, nullable=True)          # 持仓期最大浮盈
+    # 绩效（注意：以下字段语义已改为“百分比（小数）”）
+    pnl_percent = Column(Float, nullable=True)         # 最终百分比收益（如 0.012 表示 1.2%）
+    max_drawdown_percent = Column(Float, nullable=True)  # 持仓期最大回撤百分比（小数）
+    peak_pnl_percent = Column(Float, nullable=True)          # 持仓期最大浮盈百分比（小数）
+
+    # 新增：持仓持续时间（单位小时）
+    hold_duration_hours = Column(Float, nullable=True)  #从入场到出场的时间
 
     __table_args__ = (
         Index('ix_pair_signal_ab_time', 'a', 'b', 'created_time'),
@@ -220,12 +226,26 @@ class PairSignalStrategy(IStrategy):
                 return "close", ma
         return None, ma
 
+    # 组合名义成本（百分比分母）
+    def _notional(self, side: str, beta: float, a_in: float, b_in: float) -> float:
+        # 统一用两腿名义和作为基准
+        return float(a_in) + float(beta) * float(b_in)
+
     def _pnl_abs(self, side: str, beta: float, a_in: float, b_in: float, a_out: float, b_out: float):
         if side == "longA_shortB":
             return (a_out - a_in) - beta * (b_out - b_in)
         elif side == "shortA_longB":
             return -(a_out - a_in) + beta * (b_out - b_in)
         return None
+
+    def _pnl_pct(self, side: str, beta: float, a_in: float, b_in: float, a_out: float, b_out: float):
+        pnl_abs = self._pnl_abs(side, beta, a_in, b_in, a_out, b_out)
+        if pnl_abs is None:
+            return None
+        notional = self._notional(side, beta, a_in, b_in)
+        if notional == 0 or np.isnan(notional):
+            return None
+        return float(pnl_abs) / float(notional)
 
     # 计算是否观察期超时
     def _is_observe_timeout(self, sig: PairSignal, now_utc: datetime) -> bool:
@@ -307,8 +327,12 @@ class PairSignalStrategy(IStrategy):
                 sig.bb_entry_mid = float(ma)
                 sig.bb_entry_up = float(up)
                 sig.bb_entry_lo = float(lo)
-                sig.peak_pnl = 0.0
-                sig.max_drawdown_abs = 0.0
+                # 计算并保存名义成本
+                entry_notional = self._notional(side, beta, sig.a_entry_price, sig.b_entry_price)
+                sig.notional = float(entry_notional)
+                # 初始化百分比峰值与回撤
+                sig.peak_pnl_percent = 0.0            # 百分比（小数）
+                sig.max_drawdown_percent = 0.0    # 百分比（小数）
 
         session.commit()
 
@@ -327,20 +351,24 @@ class PairSignalStrategy(IStrategy):
             A_1m_latest = float(close_prices_1m[a].iloc[-1])
             B_1m_latest = float(close_prices_1m[b].iloc[-1])
 
-            # 更新浮盈 -> peak -> 回撤
-            curr_pnl = self._pnl_abs(sig.side, beta, sig.a_entry_price, sig.b_entry_price, A_1m_latest, B_1m_latest)
-            if curr_pnl is not None:
-                prev_peak = sig.peak_pnl or 0.0
-                sig.peak_pnl = max(prev_peak, curr_pnl)
-                dd = float(sig.peak_pnl) - float(curr_pnl)
-                sig.max_drawdown_abs = max(float(sig.max_drawdown_abs or 0.0), dd)
+            # 更新浮盈百分比 -> peak -> 回撤百分比
+            curr_pnl_pct = self._pnl_pct(sig.side, beta, sig.a_entry_price, sig.b_entry_price, A_1m_latest, B_1m_latest)
+            if curr_pnl_pct is not None:
+                prev_peak_pct = float(sig.peak_pnl_percent or 0.0)
+                sig.peak_pnl_percent = max(prev_peak_pct, float(curr_pnl_pct))   # 百分比
+                dd_pct = float(sig.peak_pnl_percent) - float(curr_pnl_pct)       # 百分比
+                sig.max_drawdown_percent = max(float(sig.max_drawdown_percent or 0.0), dd_pct)  # 百分比
+
 
             # 正常出场判定
             res, ma_mid = self._try_close(A_5m, B_5m, beta, A_1m_latest, B_1m_latest, sig.side)
             reason = "to_mid" if res == "close" else None
 
+            if curr_pnl_pct<0.0015:
+                reason=None
+
             # 强制退出判定（通过时间推导）
-            if reason is None and self._is_hold_timeout(sig, now_utc):
+            if self._is_hold_timeout(sig, now_utc):
                 reason = "force_exit"
 
             # 触发退出
@@ -351,7 +379,13 @@ class PairSignalStrategy(IStrategy):
                 sig.b_exit_price = B_1m_latest
                 sig.bb_exit_mid = float(ma_mid)
                 sig.exit_reason = reason
-                sig.pnl_abs = curr_pnl
+                # 存储最终百分比盈亏
+                final_pnl_pct = self._pnl_pct(sig.side, beta, sig.a_entry_price, sig.b_entry_price, A_1m_latest, B_1m_latest)
+                sig.pnl_percent = float(final_pnl_pct) if final_pnl_pct is not None else None  # 百分比
+
+                delta_sec = (sig.exit_trade_time - sig.entry_trade_time).total_seconds()
+                sig.hold_duration_hours = float(delta_sec) / 3600.0
+
 
         session.commit()
 
